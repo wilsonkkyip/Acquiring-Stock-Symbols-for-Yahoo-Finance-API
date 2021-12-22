@@ -1,0 +1,292 @@
+---
+title: "Acquiring Stock Symbols"
+output: 
+    rmarkdown::github_document:
+        html_preview: false
+---
+
+## Introduction
+
+This document aims to obtain a list of stock symbols for the stock listed on either HKEX, the US stock exchanges or the FX market. The symbol describing the same equity might be vary in different websites/documents, especially for those ETF symbols in the US market. The symbols obtained from this document are compatible with those used in Yahoo Finance API. 
+
+## Equity Symbols in HKEX 
+
+A full list of security symbols can be found from the [HKEX website](https://www.hkex.com.hk/Services/Trading/Securities/Overview/Trading-Mechanism?sc_lang=en). The direct url to the Excel spreadsheet is listed below.
+
+```{text}
+https://www.hkex.com.hk/eng/services/trading/securities/securitieslists/ListOfSecurities.xlsx
+```
+
+### Using Python
+
+```{python}
+def HKSymbol():
+    import re
+    import requests
+    import openpyxl
+    import pandas as pd
+    from io import BytesIO
+
+    url = "https://www.hkex.com.hk/eng/services/trading/securities/securitieslists/ListOfSecurities.xlsx"
+    wb = openpyxl.load_workbook(filename=BytesIO(requests.get(url).content))
+    response = pd.DataFrame(wb.active.values)
+    
+    response.columns = response.iloc[2].to_list()
+    response = response.drop([0, 1, 2] + [i for i, x in enumerate(list(response["Stock Code"])) if x is None])
+    
+    response["Board Lot"] = response["Board Lot"].apply(lambda x: int(re.sub("\,", "", x)))
+    return(response)
+
+def HKSymbolForYahooAPI():
+    # This function extracts the symbols and converts them into those 
+    # can be used in the Yahoo Finance API.
+    import re
+    response = HKSymbol()
+    symbols = response["Stock Code"].loc[response["Category"].isin(
+        ["Real Estate Investment Trusts", "Exchange Traded Products", "Equity"]
+    )]
+    symbols = symbols.apply(lambda x: re.sub("^0", "", x) + ".HK")
+    return(list(symbols))
+```
+
+Below shows the results of the above functions.
+
+```{python}
+symbolTbl = HKSymbol()
+```
+
+```{r, echo = FALSE}
+knitr::kable(head(reticulate::py$symbolTbl))
+```
+
+The Yahoo Finance AIP recognizes the following symbols. 
+
+```{python}
+symbols = HKSymbolForYahooAPI()
+symbols[0:10]
+```
+
+### Using R 
+
+```{r}
+HKSymbol <- function(){
+    url <- "https://www.hkex.com.hk/eng/services/trading/securities/securitieslists/ListOfSecurities.xlsx"
+    response <- as.data.frame(readtext::readtext(url))
+    names(response) <- unname(unlist(response[2, ]))
+    response <- response[3:nrow(response), ]
+    response[, 1] <- NULL
+    
+    return(response)
+}
+
+HKSymbolForYahooAPI <- function(){
+    # This function extracts the symbols and converts them into those 
+    # can be used in the Yahoo Finance API.
+    response <- HKSymbol()
+    symbols <- response$`Stock Code`[response$Category %in% c("Real Estate Investment Trusts", "Exchange Traded Products", "Equity")]
+    symbols <- paste0(gsub("^0", "", symbols), ".HK")
+    return(symbols)
+}
+```
+
+Below shows the results of the above functions. 
+
+```{r, message = FALSE}
+response <- HKSymbol()
+names(response) <- gsub("\r\n", "\\\\n", names(response))
+knitr::kable(head(response))
+```
+
+The Yahoo Finance AIP recognizes the following symbols. 
+
+```{r, message = FALSE}
+head(HKSymbolForYahooAPI())
+```
+
+## Equity Symbols in US Market 
+
+A list of equity symbols can be found from [nasdaqtrader.com](http://www.nasdaqtrader.com/trader.aspx?id=symboldirdefs). 
+
+### Using Python 
+
+```{python}
+def USSymbol():
+    import pandas as pd
+    file = "nasdaqtraded.txt"
+    url = "ftp://ftp.nasdaqtrader.com/SymbolDirectory/" + file
+    
+    response = pd.read_csv(url, sep = "|")
+    response = response.iloc[[i for i, x in enumerate(response["Test Issue"].to_list()) if x != "Y"]][:-1]
+    
+    response["Symbol"] = response["NASDAQ Symbol"]
+    response["Exchange"] = response["Listing Exchange"]
+    
+    response["Symbol"] = response["Symbol"].str.replace("-", "-P", regex = True)
+    response["Symbol"] = response["Symbol"].str.replace("=", "-UN", regex = True)
+    response["Symbol"] = response["Symbol"].str.replace("#", "-WI", regex = True)
+    response["Symbol"] = response["Symbol"].str.replace("\.", "-", regex = True)
+    response["Symbol"] = response["Symbol"].str.replace("\+", "-WT", regex = True)
+    response["Symbol"] = response["Symbol"].str.replace("\^", "-RI", regex = True)
+    
+    response = response[["Symbol", "Security Name", "Exchange", "ETF", "Round Lot Size"]]
+    return(response)
+```
+
+Yahoo Finance API recognizes the following symbols. 
+
+```{python}
+response = USSymbol()
+```
+
+```{r, echo = FALSE, message = FALSE}
+knitr::kable(head(reticulate::py$response))
+```
+
+
+
+### Using R 
+
+```{r}
+getUSSymbolsList <- function(){
+    files <- "nasdaqtraded.txt"
+    column.names <- c("^Symbol$", "^Security.Name$", "^Exchange$", "^ETF$", "^Round.Lot.Size$")
+    
+    url <- paste0("ftp://ftp.nasdaqtrader.com/SymbolDirectory/", files)
+    response <- read.csv(url, header = T, sep = "|", as.is = T)
+    response <- response[response$Test.Issue != "Y", ]
+    response <- response[-nrow(response), ]
+    
+    response$Symbol <- response$NASDAQ.Symbol
+    response$Exchange <- response$Listing.Exchange
+    
+    pattern <- c("-", "=", "#", "\\.", "\\+", "\\^")
+    replace <- c("-P", "-UN", "-WI", "-", "-WT", "-RI")
+    
+    invisible(mapply(function(x, y){
+        response$Symbol <<- gsub(x, y, response$Symbol)
+    }, pattern, replace))
+    
+    col.loc <- sapply(column.names, grep, names(response))
+    response <- response[, c(col.loc, recursive = T)]
+    
+    return(response)
+}
+```
+
+Yahoo Finance API recognizes the following symbols. 
+
+```{r, message = FALSE}
+knitr::kable(head(getUSSymbolsList()))
+```
+
+## Forex Symbols 
+
+Most of the currency in the world have can be represented by [ISO-4217](https://www.iso.org/iso-4217-currency-codes.html), a three letters combination. An XML table mapping the curreny to the ISO-4217 can be found form the below url. 
+
+```{text}
+https://www.currency-iso.org/dam/downloads/lists/list_one.xml
+```
+
+Yahoo Finance API takes a forex symbol in the form of `CUR1CUR2=X`, where `CUR1` and `CUR2` are two distinct ISO-4217 currency code. For example, the forex symbol converting `HKD` to `USD` is given by `HKDUSD=X`. 
+
+### Using Python 
+
+```{python}
+def FXSymbol():
+    import xmltodict
+    import requests
+    import pandas as pd
+    response = requests.get("https://www.currency-iso.org/dam/downloads/lists/list_one.xml")
+    
+    xml = xmltodict.parse(response.text).get("ISO_4217").get("CcyTbl").get("CcyNtry")
+    xml = list(map(lambda x: pd.DataFrame.from_dict(dict(xml[x]), orient = "index").transpose(), range(len(xml))))
+    xml = pd.concat(xml)
+    xml.columns = ["Entity", "Currency", "Symbol", "Num Symbol", "Minor Unit"]
+    return(xml)
+```
+
+```{python, message = FALSE, warning = FALSE}
+df = FXSymbol()
+```
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+knitr::kable(head(reticulate::py$df))
+```
+
+Below converts the ISO-4217 currency code into symbols that are used in Yahoo Finance API. As we usually only interested in the conversion between one currency and another *major* currency. We define the *major* currency as the following list.
+
+```{text}
+["HKD", "USD", "EUR", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF"]
+```
+
+```{python}
+import itertools
+currency = list(set(list(df["Symbol"])))
+currency = [x for x in currency if ((isinstance(x, str)) and (len(x) == 3))]
+imp_currency = ["HKD", "USD", "EUR", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF"]
+
+symbols = [[y + x + "=X" for y in currency] for x in imp_currency]
+symbols = list(itertools.chain(*symbols))
+
+symbols_rev = [[x + y + "=X" for y in currency] for x in imp_currency]
+symbols_rev = list(itertools.chain(*symbols_rev))
+
+remove_symbols = [x + x + "=X" for x in imp_currency]
+
+symbols = list(set(symbols) - set(remove_symbols))
+
+symbols[0:10]
+```
+
+### Using R 
+
+```{r}
+getFXSymbolsList <- function(){
+    response <- httr::content(httr::GET("https://www.currency-iso.org/dam/downloads/lists/list_one.xml"))
+    tbl <- rvest::html_nodes(response, "CcyNtry")
+    
+    attr_names <- c("CtryNm", "CcyNm", "Ccy", "CcyNbr", "CcyMnrUnts")
+    
+    result <- as.data.frame(t(sapply(tbl, function(x){
+        sapply(attr_names, function(y){
+        node_result <- rvest::html_text(rvest::html_nodes(x, y))
+        return(ifelse(identical(node_result, character(0)), NA, node_result))
+        })
+    })))
+    
+    names(result) <- c("Entity", "Currency", "Symbol", "Num.Symbol", "Minor.Unit")
+    return(result)
+}
+```
+
+```{r, message = FALSE, warning = FALSE}
+df <- getFXSymbolsList()
+knitr::kable(head(df))
+```
+
+Below converts the ISO-4217 currency code into symbols that are used in Yahoo Finance API. As we usually only interested in the conversion between one currency and another *major* currency. We define the *major* currency as the following list.
+
+```{text}
+["HKD", "USD", "EUR", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF"]
+```
+
+```{r}
+currency <- unique(df$Symbol)
+currency <- currency[!is.na(currency)]
+
+imp_currency <- c("HKD", "USD", "EUR", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF")
+
+symbols <- c(sapply(imp_currency, function(x){
+    return(paste0(currency, x, "=X"))
+}))
+
+symbols <- append(symbols, c(sapply(imp_currency, function(x){
+    return(paste0(x, currency, "=X"))
+})))
+
+symbols <- unique(symbols[-which(symbols %in% paste0(imp_currency, imp_currency, "=X"))])
+
+head(symbols, 10)
+```
+
+
